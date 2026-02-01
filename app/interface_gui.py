@@ -2,6 +2,8 @@
 interface_gui.py - Interface แบบ GUI (Pygame) สำหรับเกม Thaichecker
 """
 
+import copy
+import csv
 import pygame
 import sys
 from board import Board, Player, PieceType
@@ -51,10 +53,14 @@ class GUI:
         self.move_log = []  # [(white_move, black_move), ...]
         self.current_round_white_move = None
 
+        # Undo history
+        self.history = []
+
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.Font(None, 36)
-        self.small_font = pygame.font.Font(None, 24)
-        self.tiny_font = pygame.font.Font(None, 18)
+        thai_font = "Thonburi"
+        self.font = pygame.font.SysFont(thai_font, 28)
+        self.small_font = pygame.font.SysFont(thai_font, 20)
+        self.tiny_font = pygame.font.SysFont(thai_font, 16)
 
     def get_square_from_mouse(self, pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         """แปลงตำแหน่งเมาส์เป็น (row, col) บนกระดาน"""
@@ -214,7 +220,32 @@ class GUI:
             text = self.tiny_font.render(move_text, True, self.BLUE)
             self.screen.blit(text, (log_x + 10, y_offset))
 
-        # ปุ่ม Save CSV
+        # ปุ่ม Load CSV (ฟ้า)
+        load_y = self.WINDOW_HEIGHT - 140
+        load_rect = pygame.Rect(log_x + 10, load_y, self.LOG_PANEL_WIDTH - 20, 35)
+        pygame.draw.rect(self.screen, self.BLUE, load_rect)
+        pygame.draw.rect(self.screen, self.BLACK, load_rect, 2)
+
+        load_text = self.small_font.render("Load CSV", True, self.WHITE)
+        load_text_rect = load_text.get_rect(center=load_rect.center)
+        self.screen.blit(load_text, load_text_rect)
+
+        self.load_button_rect = load_rect
+
+        # ปุ่ม Undo (ส้ม)
+        undo_y = self.WINDOW_HEIGHT - 95
+        undo_rect = pygame.Rect(log_x + 10, undo_y, self.LOG_PANEL_WIDTH - 20, 35)
+        undo_color = self.ORANGE if self.history else self.GRAY
+        pygame.draw.rect(self.screen, undo_color, undo_rect)
+        pygame.draw.rect(self.screen, self.BLACK, undo_rect, 2)
+
+        undo_text = self.small_font.render("Undo (Ctrl+Z)", True, self.BLACK)
+        undo_text_rect = undo_text.get_rect(center=undo_rect.center)
+        self.screen.blit(undo_text, undo_text_rect)
+
+        self.undo_button_rect = undo_rect
+
+        # ปุ่ม Save CSV (เขียว)
         button_y = self.WINDOW_HEIGHT - 50
         button_rect = pygame.Rect(log_x + 10, button_y, self.LOG_PANEL_WIDTH - 20, 35)
         pygame.draw.rect(self.screen, self.GREEN, button_rect)
@@ -224,7 +255,6 @@ class GUI:
         save_rect = save_text.get_rect(center=button_rect.center)
         self.screen.blit(save_text, save_rect)
 
-        # เก็บ button rect สำหรับ click detection
         self.save_button_rect = button_rect
 
     def draw(self):
@@ -240,7 +270,6 @@ class GUI:
 
     def save_csv(self):
         """บันทึก move log เป็นไฟล์ CSV"""
-        import csv
         from datetime import datetime
 
         filename = f"thaichecker_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -258,8 +287,155 @@ class GUI:
 
         print(f"บันทึก move log ไปที่: {filename}")
 
+    def _save_state(self):
+        """บันทึก snapshot ของสถานะเกมปัจจุบันลง history stack"""
+        self.history.append({
+            'board': copy.deepcopy(self.board),
+            'current_player': self.current_player,
+            'move_log': list(self.move_log),
+            'current_round_white_move': self.current_round_white_move,
+            'game_over': self.game_over,
+            'winner': self.winner,
+        })
+
+    def undo(self):
+        """ย้อนกลับ 1 ตา โดย pop snapshot จาก history stack"""
+        if not self.history:
+            return
+        state = self.history.pop()
+        self.board = state['board']
+        self.current_player = state['current_player']
+        self.move_log = state['move_log']
+        self.current_round_white_move = state['current_round_white_move']
+        self.game_over = state['game_over']
+        self.winner = state['winner']
+        self.selected_pos = None
+        self.valid_moves = []
+
+    def _square_num_to_pos(self, num: int) -> Tuple[int, int]:
+        """แปลงเลขช่อง 1-32 เป็น (row, col)"""
+        row = (num - 1) // 4
+        pos_in_row = (num - 1) % 4
+        if row % 2 == 0:
+            col = pos_in_row * 2 + 1
+        else:
+            col = pos_in_row * 2
+        return (row, col)
+
+    def load_csv(self):
+        """โหลดไฟล์ CSV แล้ว replay ตาเดินบนกระดานใหม่"""
+        import subprocess
+        import platform
+
+        # ใช้ native file dialog ของ macOS เพื่อให้ focus ถูกต้อง
+        if platform.system() == 'Darwin':
+            result = subprocess.run(
+                ['osascript', '-e',
+                 'POSIX path of (choose file of type {"csv","CSV"} '
+                 'with prompt "เลือกไฟล์ CSV")'],
+                capture_output=True, text=True
+            )
+            filepath = result.stdout.strip()
+        else:
+            result = subprocess.run(
+                [sys.executable, "-c",
+                 "import tkinter as tk; from tkinter import filedialog; "
+                 "root = tk.Tk(); root.withdraw(); "
+                 "path = filedialog.askopenfilename("
+                 "title='เลือกไฟล์ CSV', "
+                 "filetypes=[('CSV files', '*.csv'), ('All files', '*.*')]); "
+                 "print(path); root.destroy()"],
+                capture_output=True, text=True
+            )
+            filepath = result.stdout.strip()
+
+        if not filepath:
+            return
+
+        # อ่าน CSV
+        moves = []
+        with open(filepath, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)  # ข้าม header
+            for row in reader:
+                if len(row) >= 1 and row[0].strip():
+                    moves.append(row[0].strip())
+                if len(row) >= 2 and row[1].strip():
+                    moves.append(row[1].strip())
+
+        # Reset กระดานเป็นสถานะเริ่มต้น
+        self.board = Board()
+        self.current_player = Player.WHITE
+        self.selected_pos = None
+        self.valid_moves = []
+        self.game_over = False
+        self.winner = None
+        self.move_log = []
+        self.current_round_white_move = None
+        self.history = []
+
+        # Replay แต่ละ move
+        for notation in moves:
+            parts = notation.split('-')
+            if len(parts) != 2:
+                print(f"Error: รูปแบบ move ไม่ถูกต้อง: {notation}")
+                break
+
+            try:
+                from_num = int(parts[0])
+                to_num = int(parts[1])
+            except ValueError:
+                print(f"Error: ไม่สามารถแปลงเลขช่อง: {notation}")
+                break
+
+            from_pos = self._square_num_to_pos(from_num)
+            to_pos = self._square_num_to_pos(to_num)
+
+            # หา matching move จาก valid moves
+            all_moves = GameLogic.get_all_valid_moves(self.board, self.current_player)
+            matched_move = None
+            for m in all_moves:
+                if m.from_pos == from_pos and m.to_pos == to_pos:
+                    matched_move = m
+                    break
+
+            if not matched_move:
+                print(f"Error: move ไม่ถูกต้อง: {notation} (ผู้เล่น: {self.current_player.value})")
+                break
+
+            # บันทึก move ลง log
+            if self.current_player == Player.WHITE:
+                self.current_round_white_move = notation
+            else:
+                self.move_log.append((self.current_round_white_move, notation))
+                self.current_round_white_move = None
+
+            # ดำเนินการ move
+            GameLogic.execute_move(self.board, matched_move)
+
+            # สลับผู้เล่น
+            self.current_player = Player.BLACK if self.current_player == Player.WHITE else Player.WHITE
+
+        # เช็คเกมจบ
+        game_over, winner = GameLogic.is_game_over(self.board)
+        if game_over:
+            self.game_over = True
+            self.winner = winner
+
+        print(f"โหลด CSV สำเร็จ: {len(moves)} ตา จากไฟล์ {filepath}")
+
     def handle_click(self, pos: Tuple[int, int]):
         """จัดการการคลิกเมาส์"""
+        # เช็คคลิกปุ่ม Undo
+        if hasattr(self, 'undo_button_rect') and self.undo_button_rect.collidepoint(pos):
+            self.undo()
+            return
+
+        # เช็คคลิกปุ่ม Load CSV
+        if hasattr(self, 'load_button_rect') and self.load_button_rect.collidepoint(pos):
+            self.load_csv()
+            return
+
         # เช็คคลิกปุ่ม Save CSV
         if hasattr(self, 'save_button_rect') and self.save_button_rect.collidepoint(pos):
             self.save_csv()
@@ -312,6 +488,9 @@ class GUI:
                     break
 
             if selected_move:
+                # บันทึก state ก่อนเดิน (สำหรับ undo)
+                self._save_state()
+
                 # บันทึก move ลง log
                 from_row, from_col = selected_move.from_pos
                 to_row, to_col = selected_move.to_pos
@@ -370,6 +549,8 @@ class GUI:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_z and (event.mod & pygame.KMOD_CTRL or event.mod & pygame.KMOD_META):
+                        self.undo()
 
             self.draw()
 
