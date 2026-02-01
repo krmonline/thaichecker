@@ -8,6 +8,7 @@ import pygame
 import sys
 from board import Board, Player, PieceType
 from game_logic import GameLogic, Move
+from ai_minimax import get_best_move
 from typing import Optional, List, Tuple
 
 
@@ -56,6 +57,13 @@ class GUI:
         # Undo history
         self.history = []
 
+        # AI settings
+        self.ai_player = Player.BLACK  # AI เล่นฝั่งดำ
+        self.ai_depth = 6
+
+        # แสดงเลขช่อง 1-32 (True=ตัวเลข, False=จุด)
+        self.show_square_numbers = True
+
         self.clock = pygame.time.Clock()
         thai_font = "Thonburi"
         self.font = pygame.font.SysFont(thai_font, 28)
@@ -93,13 +101,18 @@ class GUI:
                 # วาดเส้นขอบ
                 pygame.draw.rect(self.screen, self.BLACK, (x, y, self.SQUARE_SIZE, self.SQUARE_SIZE), 1)
 
-                # วาดเลขช่องสำหรับช่องสีดำ (1-32)
+                # วาดเลขช่องหรือจุดสำหรับช่องสีดำ (1-32)
                 if self.board.is_dark_square(row, col):
-                    square_num = self.board.get_square_number(row, col)
-                    if square_num:
-                        num_text = self.small_font.render(str(square_num), True, self.BLACK)
-                        text_rect = num_text.get_rect(topleft=(x + 3, y + 3))
-                        self.screen.blit(num_text, text_rect)
+                    if self.show_square_numbers:
+                        square_num = self.board.get_square_number(row, col)
+                        if square_num:
+                            num_text = self.small_font.render(str(square_num), True, self.BLACK)
+                            text_rect = num_text.get_rect(topleft=(x + 3, y + 3))
+                            self.screen.blit(num_text, text_rect)
+                    else:
+                        dot_x = x + 6
+                        dot_y = y + 6
+                        pygame.draw.circle(self.screen, self.BLACK, (dot_x, dot_y), 3)
 
     def draw_pieces(self):
         """วาดตัวหมาก"""
@@ -444,6 +457,10 @@ class GUI:
         if self.game_over:
             return
 
+        # ไม่ให้คลิกตอนตา AI
+        if self.current_player == self.ai_player:
+            return
+
         square = self.get_square_from_mouse(pos)
         if square is None:
             return
@@ -531,6 +548,47 @@ class GUI:
                     self.valid_moves = []
                     self.handle_click(pos)  # เลือกใหม่
 
+    def play_ai_turn(self):
+        """ให้ AI เดินอัตโนมัติเมื่อถึงตา AI"""
+        if self.game_over or self.current_player != self.ai_player:
+            return
+
+        move = get_best_move(self.board, self.ai_player, self.ai_depth)
+        if move is None:
+            return
+
+        # บันทึก state ก่อนเดิน (สำหรับ undo)
+        self._save_state()
+
+        # บันทึก move ลง log
+        from_row, from_col = move.from_pos
+        to_row, to_col = move.to_pos
+        from_num = self.board.get_square_number(from_row, from_col)
+        to_num = self.board.get_square_number(to_row, to_col)
+        move_notation = f"{from_num}-{to_num}"
+
+        if self.current_player == Player.WHITE:
+            self.current_round_white_move = move_notation
+        else:
+            self.move_log.append((self.current_round_white_move, move_notation))
+            self.current_round_white_move = None
+
+        # ดำเนินการ move
+        GameLogic.execute_move(self.board, move)
+
+        # สลับผู้เล่น
+        self.current_player = Player.BLACK if self.current_player == Player.WHITE else Player.WHITE
+
+        # เช็คเกมจบ
+        game_over, winner = GameLogic.is_game_over(self.board)
+        if game_over:
+            self.game_over = True
+            self.winner = winner
+
+        # ล้างการเลือก
+        self.selected_pos = None
+        self.valid_moves = []
+
     def run(self):
         """เริ่มเกม"""
         running = True
@@ -549,8 +607,16 @@ class GUI:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_n:
+                        self.show_square_numbers = not self.show_square_numbers
                     elif event.key == pygame.K_z and (event.mod & pygame.KMOD_CTRL or event.mod & pygame.KMOD_META):
                         self.undo()
+
+            # ให้ AI เดินอัตโนมัติเมื่อถึงตา
+            if not self.game_over and self.current_player == self.ai_player:
+                self.draw()  # วาดก่อนให้เห็นสถานะ
+                pygame.event.pump()  # ให้ Pygame ไม่ค้าง
+                self.play_ai_turn()
 
             self.draw()
 

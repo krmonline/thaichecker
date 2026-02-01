@@ -126,8 +126,8 @@ class Board:
         """นับจำนวนตัวหมากของผู้เล่น"""
         return len(self.get_all_pieces(player))
 
-    def __repr__(self):
-        """แสดงกระดานในรูปแบบข้อความ"""
+    def to_string(self, show_numbers: bool = True) -> str:
+        """แสดงกระดานในรูปแบบข้อความ (show_numbers=False จะแสดง . แทนเลขช่อง)"""
         result = "   0  1  2  3  4  5  6  7\n"
         for row in range(self.size):
             result += f"{row} "
@@ -136,9 +136,16 @@ class Board:
                 if piece:
                     result += f"{str(piece):>3}"
                 elif self.is_dark_square(row, col):
-                    square_num = self.get_square_number(row, col)
-                    result += f"{square_num:>3}"
+                    if show_numbers:
+                        square_num = self.get_square_number(row, col)
+                        result += f"{square_num:>3}"
+                    else:
+                        result += "  ."
                 else:
                     result += "   "
             result += "\n"
         return result
+
+    def __repr__(self):
+        """แสดงกระดานในรูปแบบข้อความ"""
+        return self.to_string(show_numbers=True)
